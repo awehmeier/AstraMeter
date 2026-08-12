@@ -15,6 +15,7 @@ from astrameter.cloud_reporting import (
 from astrameter.config.config_loader import (
     ClientFilter,
     read_all_powermeter_configs,
+    read_modbus_server_config,
     read_mqtt_insights_config,
 )
 from astrameter.config.logger import logger, setLogLevel
@@ -24,6 +25,7 @@ from astrameter.marstek_api import (
     MarstekConfig,
     ensure_managed_fake_device,
 )
+from astrameter.modbus_server import ModbusOutputServer
 from astrameter.mqtt_insights import (
     MarstekMqttBinding,
     MqttInsightsService,
@@ -133,6 +135,38 @@ def _reset_all_powermeters(
 ) -> None:
     for pm, *_ in powermeters:
         pm.reset()
+
+
+def _should_start_modbus_server(device_types: Sequence[str]) -> bool:
+    """The Modbus output server represents the shellypro3em device as a
+    whole; it must start exactly once even though ``_resolve_device_config``
+    always expands a configured "shellypro3em" into both the
+    ``shellypro3em_old`` and ``shellypro3em_new`` UDP-listener variants (same
+    device_id, see docs/decisions/0002-implementation-plan.md section 0.a in
+    the astrameter-modbus-project repo) -- so this checks for *any* match
+    rather than being wired per device_type."""
+    return any(dt.startswith("shellypro3em") for dt in device_types)
+
+
+def _select_shellypro3em_device_id(
+    device_types: Sequence[str], device_ids: Sequence[str]
+) -> str | None:
+    for device_type, device_id in zip(device_types, device_ids, strict=False):
+        if device_type.startswith("shellypro3em"):
+            return device_id
+    return None
+
+
+def _select_default_powermeter(
+    powermeters: Sequence[tuple[Powermeter, ClientFilter, object]],
+) -> Powermeter | None:
+    """Mirrors the Marstek MQTT responder's meter selection (main.py's
+    ``_marstek_get_values``): prefer the wildcard-filtered meter, else the
+    first configured one."""
+    chosen = next((pm for pm, cf, _ in powermeters if cf.matches("0.0.0.0")), None)
+    if chosen is None and powermeters:
+        chosen = powermeters[0][0]
+    return chosen
 
 
 async def run_device(
@@ -612,6 +646,7 @@ async def async_main(
 
     powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
     insights: MqttInsightsService | None = None
+    modbus_server: ModbusOutputServer | None = None
 
     try:
         # Create powermeters
@@ -633,6 +668,58 @@ async def async_main(
             )
             await insights.start()
             logger.info("MQTT Insights service started")
+
+        # Modbus TCP output server (optional) -- a single instance
+        # representing the whole shellypro3em device, started here rather
+        # than per device_type in run_device() so it never double-starts
+        # for the shellypro3em_old/_new UDP-listener pair (see
+        # _should_start_modbus_server).
+        modbus_cfg = read_modbus_server_config(cfg)
+        if modbus_cfg and _should_start_modbus_server(device_types):
+            if not modbus_cfg.bind_host:
+                # No 0.0.0.0 fallback: Modbus TCP has no built-in
+                # authentication, so silently binding every interface when
+                # BIND_HOST is unset would be an insecure default (ADR 0001
+                # point 12 in the astrameter-modbus-project repo). An
+                # explicitly configured BIND_HOST (including "0.0.0.0", if a
+                # user deliberately chooses it) is passed through unchanged.
+                logger.error(
+                    "MODBUS_SERVER.ENABLED is true, but BIND_HOST is not "
+                    "set. Modbus TCP has no built-in authentication, so "
+                    "there is no safe default interface to bind -- set "
+                    "MODBUS_SERVER.BIND_HOST to your LAN interface IP. "
+                    "Modbus output server not started."
+                )
+            else:
+                default_powermeter = _select_default_powermeter(powermeters)
+                if default_powermeter is None:
+                    logger.error(
+                        "MODBUS_SERVER.ENABLED is true, but no powermeter is "
+                        "configured; Modbus output server not started."
+                    )
+                else:
+                    modbus_server = ModbusOutputServer(
+                        bind_host=modbus_cfg.bind_host,
+                        port=modbus_cfg.port,
+                        powermeter=default_powermeter,
+                        device_mac=modbus_cfg.device_mac,
+                        device_model=modbus_cfg.device_model,
+                        device_name=_select_shellypro3em_device_id(
+                            device_types, device_ids
+                        )
+                        or "",
+                        unit_id=modbus_cfg.unit_id,
+                        refresh_interval=modbus_cfg.refresh_interval,
+                        energy_state_file=modbus_cfg.energy_state_file,
+                        energy_persist_interval=modbus_cfg.energy_persist_interval,
+                    )
+                    if not await modbus_server.start():
+                        modbus_server = None
+        elif modbus_cfg:
+            logger.warning(
+                "MODBUS_SERVER.ENABLED is true, but no shellypro3em device "
+                "is configured; Modbus output server not started."
+            )
 
         if not device_types:
             logger.warning("No runnable device types configured after filtering.")
@@ -657,6 +744,11 @@ async def async_main(
     finally:
         # Best-effort shutdown: each resource gets a stop attempt even if
         # an earlier one fails.
+        if modbus_server:
+            try:
+                await modbus_server.stop()
+            except Exception:
+                logger.exception("Error stopping Modbus output server")
         if insights:
             try:
                 await insights.stop()

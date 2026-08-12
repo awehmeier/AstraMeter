@@ -360,6 +360,17 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         WORD_ORDER={"type": "select", "options": ["BIG", "LITTLE"]},
         REGISTER_TYPE={"type": "select", "options": ["HOLDING", "INPUT"]},
     ),
+    "MODBUS_SERVER": {
+        "ENABLED": {"type": "boolean"},
+        "BIND_HOST": {"type": "string"},
+        "PORT": {"type": "integer"},
+        "UNIT_ID": {"type": "integer"},
+        "DEVICE_MAC": {"type": "string"},
+        "DEVICE_MODEL": {"type": "string"},
+        "REFRESH_INTERVAL": {"type": "float", "min": 0},
+        "ENERGY_STATE_FILE": {"type": "string"},
+        "ENERGY_PERSIST_INTERVAL": {"type": "float", "min": 0},
+    },
     "MQTT": _pm(
         PORT={"type": "integer"},
         TLS={"type": "boolean"},

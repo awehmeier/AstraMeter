@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
 if TYPE_CHECKING:
+    from astrameter.modbus_server import ModbusServerConfig
     from astrameter.mqtt_insights import MqttInsightsConfig
 
 from astrameter.config.logger import logger
@@ -61,6 +62,10 @@ SML_SECTION = "SML"
 ESPHOME_SECTION = "ESPHOME"
 AMIS_READER_SECTION = "AMIS_READER"
 MODBUS_SECTION = "MODBUS"
+# [MODBUS_SERVER] is the OUTPUT direction (a Modbus TCP server emulating a
+# Shelly Pro 3EM for third-party hubs) -- the opposite of [MODBUS] above,
+# which reads an external meter as an input source.
+MODBUS_SERVER_SECTION = "MODBUS_SERVER"
 JSON_HTTP_SECTION = "JSON_HTTP"
 TQ_EM_SECTION = "TQ_EM"
 HOMEWIZARD_SECTION = "HOMEWIZARD"
@@ -384,7 +389,9 @@ def create_powermeter(
         return create_esphome_powermeter(section, config)
     elif section.startswith(AMIS_READER_SECTION):
         return create_amisreader_powermeter(section, config)
-    elif section.startswith(MODBUS_SECTION):
+    elif section.startswith(MODBUS_SECTION) and not section.startswith(
+        MODBUS_SERVER_SECTION
+    ):
         return create_modbus_powermeter(section, config)
     elif section.startswith(TQ_EM_SECTION):
         return create_tq_em_powermeter(section, config)
@@ -824,3 +831,46 @@ def read_mqtt_insights_config(
                 else 30.0,
             )
     return None
+
+
+def read_modbus_server_config(
+    config: configparser.ConfigParser,
+) -> ModbusServerConfig | None:
+    """Read [MODBUS_SERVER] (the Modbus TCP *output* server); ``None`` if
+    absent or not enabled."""
+    from astrameter.modbus_server import ModbusServerConfig
+
+    if not config.has_section(MODBUS_SERVER_SECTION):
+        return None
+    if not config.getboolean(MODBUS_SERVER_SECTION, "ENABLED", fallback=False):
+        return None
+
+    defaults = ModbusServerConfig(bind_host="")
+    return ModbusServerConfig(
+        bind_host=config.get(MODBUS_SERVER_SECTION, "BIND_HOST", fallback=""),
+        port=config.getint(MODBUS_SERVER_SECTION, "PORT", fallback=defaults.port),
+        unit_id=config.getint(
+            MODBUS_SERVER_SECTION, "UNIT_ID", fallback=defaults.unit_id
+        ),
+        device_mac=config.get(
+            MODBUS_SERVER_SECTION, "DEVICE_MAC", fallback=defaults.device_mac
+        ),
+        device_model=config.get(
+            MODBUS_SERVER_SECTION, "DEVICE_MODEL", fallback=defaults.device_model
+        ),
+        refresh_interval=config.getfloat(
+            MODBUS_SERVER_SECTION,
+            "REFRESH_INTERVAL",
+            fallback=defaults.refresh_interval,
+        ),
+        energy_state_file=config.get(
+            MODBUS_SERVER_SECTION,
+            "ENERGY_STATE_FILE",
+            fallback=defaults.energy_state_file,
+        ),
+        energy_persist_interval=config.getfloat(
+            MODBUS_SERVER_SECTION,
+            "ENERGY_PERSIST_INTERVAL",
+            fallback=defaults.energy_persist_interval,
+        ),
+    )

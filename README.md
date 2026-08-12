@@ -16,7 +16,9 @@ It does this by emulating one or more of these devices:
   devices; it coordinates a shared target across the fleet.
 - **Shelly Pro 3EM** — uses port 1010 (B2500 firmware up to v224) and port 2220
   (B2500 firmware v226+); target a specific port with `shellypro3em_old` (1010) or
-  `shellypro3em_new` (2220).
+  `shellypro3em_new` (2220). Optionally also serves the same live readings over
+  **Modbus TCP** (`[MODBUS_SERVER]`, disabled by default) for third-party hubs
+  that expect a real Shelly Pro 3EM, e.g. the BLUETTI Balco Transfer Hub.
 - **Shelly EM gen3**
 - **Shelly Pro EM50**
 

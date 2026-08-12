@@ -30,6 +30,7 @@ from astrameter.config.config_loader import (
     parse_float_list,
     parse_mqtt_uri,
     read_all_powermeter_configs,
+    read_modbus_server_config,
     read_mqtt_insights_config,
 )
 from astrameter.powermeter import TransformedPowermeter
@@ -639,6 +640,51 @@ def test_read_all_powermeter_configs():
             raise
 
 
+def test_create_powermeter_ignores_modbus_server_section():
+    """[MODBUS_SERVER] (the Modbus TCP *output* server, see
+    astrameter.modbus_server) must NOT be dispatched to
+    create_modbus_powermeter() just because "MODBUS_SERVER".startswith("MODBUS")
+    -- it has no HOST/ADDRESS/etc. keys and isn't a powermeter at all. Found by
+    manual dogfooding: a real [MODBUS_SERVER] section was silently turned into
+    a broken ModbusPowermeter("", ...) that would fail to connect on startup."""
+    config = configparser.ConfigParser()
+    config["MODBUS_SERVER"] = {
+        "ENABLED": "true",
+        "BIND_HOST": "192.168.178.254",
+        "PORT": "502",
+    }
+    assert create_powermeter("MODBUS_SERVER", config) is None
+
+
+def test_read_all_powermeter_configs_skips_modbus_server_section():
+    config = configparser.ConfigParser()
+    config["GENERAL"] = {}
+    config["MODBUS_SERVER"] = {"ENABLED": "true", "BIND_HOST": "192.168.178.254"}
+    assert read_all_powermeter_configs(config) == []
+
+
+def test_modbus_input_and_modbus_server_output_coexist_correctly():
+    """The exact scenario that fell through the gap: [MODBUS] (input
+    powermeter) and [MODBUS_SERVER] (output server) configured at the same
+    time. Only the input section may produce a powermeter."""
+    config = configparser.ConfigParser()
+    config["GENERAL"] = {}
+    config["MODBUS"] = {"HOST": "192.168.1.100", "PORT": "502"}
+    config["MODBUS_SERVER"] = {
+        "ENABLED": "true",
+        "BIND_HOST": "192.168.178.254",
+        "PORT": "502",
+    }
+
+    assert create_powermeter("MODBUS_SERVER", config) is None
+    modbus_input_pm = create_powermeter("MODBUS", config)
+    assert modbus_input_pm is not None
+    assert type(modbus_input_pm).__name__ == "ModbusPowermeter"
+
+    powermeters = read_all_powermeter_configs(config)
+    assert len(powermeters) == 1
+
+
 def test_parse_float_list():
     """Test parsing comma-separated float lists."""
     assert parse_float_list("10", "KEY", "SECTION") == [10.0]
@@ -787,3 +833,65 @@ def test_read_all_configs_wait_for_next_message_section_override():
     # Section order is preserved by configparser, so SCRIPT_1 (override=false)
     # is first and SCRIPT_2 (inherits global true) is second.
     assert [wait for _, _, wait in powermeters] == [False, True]
+
+
+def test_read_modbus_server_config_absent_section():
+    config = configparser.ConfigParser()
+    assert read_modbus_server_config(config) is None
+
+
+def test_read_modbus_server_config_disabled_by_default():
+    config = configparser.ConfigParser()
+    config["MODBUS_SERVER"] = {"BIND_HOST": "192.168.1.50"}
+    assert read_modbus_server_config(config) is None
+
+
+def test_read_modbus_server_config_enabled_uses_defaults():
+    config = configparser.ConfigParser()
+    config["MODBUS_SERVER"] = {"ENABLED": "true", "BIND_HOST": "192.168.1.50"}
+    cfg = read_modbus_server_config(config)
+    assert cfg is not None
+    assert cfg.bind_host == "192.168.1.50"
+    assert cfg.port == 502
+    assert cfg.unit_id == 1
+    assert cfg.device_mac == ""
+    assert cfg.device_model == "SPEM-003CEBEU"
+    assert cfg.refresh_interval == 1.0
+    assert cfg.energy_state_file == "modbus_energy_state.json"
+    assert cfg.energy_persist_interval == 60.0
+
+
+def test_read_modbus_server_config_explicit_values():
+    config = configparser.ConfigParser()
+    config["MODBUS_SERVER"] = {
+        "ENABLED": "true",
+        "BIND_HOST": "10.0.0.5",
+        "PORT": "5020",
+        "UNIT_ID": "3",
+        "DEVICE_MAC": "AABBCCDDEEFF",
+        "DEVICE_MODEL": "CUSTOM-MODEL",
+        "REFRESH_INTERVAL": "2.5",
+        "ENERGY_STATE_FILE": "/data/energy.json",
+        "ENERGY_PERSIST_INTERVAL": "30",
+    }
+    cfg = read_modbus_server_config(config)
+    assert cfg is not None
+    assert cfg.bind_host == "10.0.0.5"
+    assert cfg.port == 5020
+    assert cfg.unit_id == 3
+    assert cfg.device_mac == "AABBCCDDEEFF"
+    assert cfg.device_model == "CUSTOM-MODEL"
+    assert cfg.refresh_interval == 2.5
+    assert cfg.energy_state_file == "/data/energy.json"
+    assert cfg.energy_persist_interval == 30.0
+
+
+def test_read_modbus_server_config_bind_host_empty_when_missing():
+    """No implicit 0.0.0.0 default -- an unset BIND_HOST must surface as an
+    empty string so main.py's startup check can refuse to start the server
+    (ADR 0001 point 12 in the astrameter-modbus-project repo)."""
+    config = configparser.ConfigParser()
+    config["MODBUS_SERVER"] = {"ENABLED": "true"}
+    cfg = read_modbus_server_config(config)
+    assert cfg is not None
+    assert cfg.bind_host == ""

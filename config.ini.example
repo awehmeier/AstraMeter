@@ -303,6 +303,33 @@ THROTTLE_INTERVAL = 0
 ## Per-powermeter throttling override (optional)
 # THROTTLE_INTERVAL = 1
 
+# [MODBUS_SERVER]
+## OUTPUT direction -- the opposite of [MODBUS] above: instead of reading an
+## external meter, this runs a Modbus TCP SERVER that emulates a Shelly Pro
+## 3EM so a third-party hub (e.g. BLUETTI Balco Transfer Hub) can read live
+## meter data over Modbus TCP. Only takes effect when DEVICE_TYPE includes
+## shellypro3em; disabled by default.
+## Modbus TCP has no built-in authentication -- BIND_HOST should be your
+## LAN interface IP, not 0.0.0.0, unless the network is otherwise segmented.
+# ENABLED = false
+# BIND_HOST = 192.168.1.50
+# PORT = 502
+# UNIT_ID = 1
+## Only active power (W) per phase/total is ever real -- AstraMeter has no
+## voltage/current/frequency/power-factor measurement. Those registers stay
+## at 0/False rather than a fabricated reading; see README.md.
+## Optional device identity registers (Modbus "Device MAC"/"Device Model"):
+# DEVICE_MAC = AABBCCDDEEFF
+# DEVICE_MODEL = SPEM-003CEBEU
+## How often the live registers are refreshed from the powermeter (seconds)
+# REFRESH_INTERVAL = 1
+## Energy counters (Wh, EMDATA registers) are integrated from real measured
+## watts and persisted here so a restart doesn't reset them to 0 -- default
+## is next to this config file. How often the counter state is written back
+## (seconds); a clean stop always flushes once regardless of this interval.
+# ENERGY_STATE_FILE = modbus_energy_state.json
+# ENERGY_PERSIST_INTERVAL = 60
+
 # [MQTT]
 # BROKER = broker.example.com
 # PORT = 1883

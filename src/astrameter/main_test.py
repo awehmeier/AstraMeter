@@ -2,8 +2,15 @@ import argparse
 import configparser
 from ipaddress import IPv4Network
 
+from astrameter import main as main_module
 from astrameter.config.config_loader import ClientFilter
-from astrameter.main import _resolve_device_config, read_ct_powermeter
+from astrameter.main import (
+    _resolve_device_config,
+    _select_default_powermeter,
+    _select_shellypro3em_device_id,
+    _should_start_modbus_server,
+    read_ct_powermeter,
+)
 from astrameter.powermeter import Powermeter
 
 
@@ -114,3 +121,185 @@ def test_resolve_device_config_shellypro3em_expands_to_old_and_new():
     device_types, device_ids = _resolve("shellypro3em")
     assert device_types == ["shellypro3em_old", "shellypro3em_new"]
     assert device_ids == ["shellypro3em-ec4609c439c1", "shellypro3em-ec4609c439c1"]
+
+
+def test_should_start_modbus_server_true_for_either_shellypro3em_variant():
+    assert _should_start_modbus_server(["shellypro3em_old"])
+    assert _should_start_modbus_server(["shellypro3em_new"])
+    assert _should_start_modbus_server(["shellypro3em_old", "shellypro3em_new"])
+
+
+def test_should_start_modbus_server_false_without_shellypro3em():
+    assert not _should_start_modbus_server([])
+    assert not _should_start_modbus_server(["ct002"])
+    assert not _should_start_modbus_server(["shellyemg3", "shellyproem50"])
+
+
+def test_should_start_modbus_server_evaluated_once_not_per_variant():
+    """Even though a bare "shellypro3em" always expands to both _old and
+    _new (same device_id, see test_resolve_device_config_shellypro3em_expands_
+    to_old_and_new above), the gate is a single boolean over the whole
+    device_types list -- callers must invoke this once, not per entry, or
+    the Modbus server would start twice."""
+    device_types, _ = _resolve("shellypro3em")
+    assert _should_start_modbus_server(device_types) is True
+    # A single call over the full list, not one call per device_type.
+    assert isinstance(_should_start_modbus_server(device_types), bool)
+
+
+def test_select_shellypro3em_device_id_finds_first_match():
+    device_types, device_ids = _resolve("shellypro3em")
+    assert _select_shellypro3em_device_id(device_types, device_ids) == (
+        "shellypro3em-ec4609c439c1"
+    )
+
+
+def test_select_shellypro3em_device_id_none_without_match():
+    assert _select_shellypro3em_device_id(["ct002"], ["device-1"]) is None
+
+
+def test_select_default_powermeter_prefers_wildcard_filter():
+    wildcard = ClientFilter([IPv4Network("0.0.0.0/0")])
+    specific = _LOCAL
+    pm_specific = _StubPowermeter([1.0])
+    pm_wildcard = _StubPowermeter([2.0])
+    powermeters = [(pm_specific, specific, True), (pm_wildcard, wildcard, True)]
+    assert _select_default_powermeter(powermeters) is pm_wildcard
+
+
+def test_select_default_powermeter_falls_back_to_first():
+    pm = _StubPowermeter([1.0])
+    assert _select_default_powermeter([(pm, _LOCAL, True)]) is pm
+
+
+def test_select_default_powermeter_none_when_empty():
+    assert _select_default_powermeter([]) is None
+
+
+def _patch_modbus_server_wiring(monkeypatch) -> list[dict]:
+    """Stub out async_main()'s powermeter loading, run_device() (which would
+    otherwise bind the real, fixed 1010/2220 Shelly UDP ports) and
+    ModbusOutputServer, returning the list of kwargs each fake construction
+    was called with."""
+    stub_pm = _StubPowermeter([1.0, 2.0, 3.0])
+    wildcard = ClientFilter([IPv4Network("0.0.0.0/0")])
+    monkeypatch.setattr(
+        main_module,
+        "read_all_powermeter_configs",
+        lambda cfg: [(stub_pm, wildcard, False)],
+    )
+
+    async def _noop_run_device(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(main_module, "run_device", _noop_run_device)
+
+    constructions: list[dict] = []
+
+    class _FakeModbusOutputServer:
+        def __init__(self, **kwargs):
+            constructions.append(kwargs)
+
+        async def start(self):
+            return True
+
+        async def stop(self):
+            pass
+
+    monkeypatch.setattr(main_module, "ModbusOutputServer", _FakeModbusOutputServer)
+    return constructions
+
+
+async def _run_async_main_with_modbus_section(
+    modbus_section: dict, device_types: list[str], device_ids: list[str]
+) -> None:
+    cfg = configparser.ConfigParser()
+    cfg["GENERAL"] = {"ENABLE_WEB_SERVER": "false"}
+    cfg["MODBUS_SERVER"] = modbus_section
+    args = argparse.Namespace(config="config.ini")
+    await main_module.async_main(
+        cfg,
+        args,
+        device_types=device_types,
+        device_ids=device_ids,
+        skip_test=True,
+        managed_marstek=None,
+    )
+
+
+async def test_async_main_starts_modbus_server_exactly_once_for_old_and_new(
+    monkeypatch,
+):
+    """Even though a configured "shellypro3em" always expands to both
+    shellypro3em_old and shellypro3em_new (same device_id -- see
+    test_resolve_device_config_shellypro3em_expands_to_old_and_new), the
+    Modbus output server must start exactly once, not once per UDP-listener
+    variant -- async_main() evaluates _should_start_modbus_server()/
+    constructs ModbusOutputServer a single time regardless of how many
+    device_types entries match "shellypro3em"."""
+    constructions = _patch_modbus_server_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": "127.0.0.1"},
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert len(constructions) == 1
+    assert constructions[0]["device_name"] == "shellypro3em-x"
+
+
+async def test_async_main_skips_modbus_server_without_shellypro3em(monkeypatch):
+    constructions = _patch_modbus_server_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": "127.0.0.1"},
+        device_types=["ct002"],
+        device_ids=["device-1"],
+    )
+
+    assert constructions == []
+
+
+async def test_async_main_skips_modbus_server_when_bind_host_missing(monkeypatch):
+    """ADR 0001 point 12 (astrameter-modbus-project repo): Modbus TCP has no
+    built-in authentication, so an unset BIND_HOST must NOT silently fall
+    back to binding every interface -- the server simply does not start."""
+    constructions = _patch_modbus_server_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true"},  # no BIND_HOST at all
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert constructions == []
+
+
+async def test_async_main_skips_modbus_server_when_bind_host_empty(monkeypatch):
+    constructions = _patch_modbus_server_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": ""},
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert constructions == []
+
+
+async def test_async_main_passes_configured_bind_host_through_unchanged(monkeypatch):
+    """A BIND_HOST the user explicitly set -- including "0.0.0.0", if that
+    is a deliberate choice -- is passed to ModbusOutputServer unmodified;
+    only an unset/empty value is rejected (see the missing-BIND_HOST tests
+    above)."""
+    constructions = _patch_modbus_server_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": "192.168.1.50"},
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert len(constructions) == 1
+    assert constructions[0]["bind_host"] == "192.168.1.50"

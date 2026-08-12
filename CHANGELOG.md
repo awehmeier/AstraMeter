@@ -1,5 +1,9 @@
 # Changelog
 
+## Next
+
+- **Added** an optional Modbus TCP output server for the Shelly Pro 3EM emulator (`[MODBUS_SERVER]`, disabled by default), so third-party hubs that expect a real Shelly Pro 3EM over Modbus TCP — such as the BLUETTI Balco Transfer Hub — can read live meter data alongside the existing UDP emulation.
+
 ## 2.2.4
 
 - **Fixed** the CT002/CT003 and Shelly Pro 3EM emulators answering a battery several times in quick succession — instead of once — whenever a reading was delayed (with `WAIT_FOR_NEXT_MESSAGE` enabled, a throttled meter via `THROTTLE_INTERVAL`, or any slow power source). The battery acts on each reply relative to its current output, so the burst fed it the same stale correction repeatedly and could push it well past the intended setpoint. Batteries polling during a delayed reading now get exactly one reply per reading ([#542](https://github.com/tomquist/astrameter/pull/542)).

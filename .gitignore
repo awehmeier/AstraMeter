@@ -12,4 +12,5 @@ htmlcov/
 test-results.xml
 coverage.xml
 config.ini
+modbus_energy_state.json
 .DS_Store
