@@ -1,5 +1,14 @@
 # AstraMeter
 
+> **This fork adds a Modbus TCP output server** (see below and
+> [`docs/configuration.md`](docs/configuration.md#modbus-tcp-output-server)) on top of
+> [tomquist/AstraMeter](https://github.com/tomquist/AstraMeter). It lives on the
+> `feature/modbus-tcp-output-server` branch, not `main` (`main` stays an untouched
+> mirror of upstream for easy syncing). To get it:
+> ```
+> git clone -b feature/modbus-tcp-output-server https://github.com/awehmeier/AstraMeter.git
+> ```
+
 > **Formerly known as b2500-meter.** The project was renamed to reflect support
 > for the full range of Marstek storage systems (B2500, Jupiter, Venus, …), not
 > just the B2500.

@@ -29,6 +29,7 @@ specific to one area, see:
 - [Value Transformation](#value-transformation)
 - [PID Controller](#pid-controller)
 - [Multiple Powermeters](#multiple-powermeters)
+- [Modbus TCP Output Server](#modbus-tcp-output-server)
 
 ## General Configuration
 
@@ -218,3 +219,42 @@ ACCESSTOKEN = YOUR_ACCESS_TOKEN
 CURRENT_POWER_ENTITY = sensor.current_power
 # No NETMASK specified - will match all clients (0.0.0.0/0)
 ```
+
+## Modbus TCP Output Server
+
+Output direction — the opposite of a `[MODBUS]` powermeter section (which reads an
+*external* meter). This runs a Modbus TCP **server** that emulates a Shelly Pro 3EM,
+so a third-party hub that expects a real Shelly Pro 3EM over Modbus TCP (e.g. the
+BLUETTI Balco Transfer Hub) can read live meter data — alongside, not instead of, the
+existing UDP/JSON-RPC Shelly emulation used by Marstek batteries. Disabled by default;
+only takes effect when `DEVICE_TYPE` includes a `shellypro3em*` type. Read-only:
+active power (W) per phase/total and cumulative energy (Wh) are the only real,
+measured values — voltage, current, frequency, power factor and error-flag registers
+are always 0/False rather than fabricated.
+
+```ini
+[MODBUS_SERVER]
+ENABLED = false
+# Required when ENABLED — your LAN interface IP, not 0.0.0.0. Modbus TCP has no
+# built-in authentication, so there is no safe default to bind every interface.
+BIND_HOST = 192.168.1.50
+PORT = 502
+UNIT_ID = 1
+# Optional device-identity registers a client may read (Modbus "Device MAC"/"Model").
+DEVICE_MAC = AABBCCDDEEFF
+DEVICE_MODEL = SPEM-003CEBEU
+# How often the live registers refresh from the powermeter (seconds).
+REFRESH_INTERVAL = 1
+# Energy counters (Wh) are integrated from real measured watts and persisted here so
+# a restart doesn't reset them to 0. Default path is next to config.ini.
+ENERGY_STATE_FILE = modbus_energy_state.json
+# How often the persisted counter state is written back (seconds); a clean stop
+# always flushes once regardless of this interval.
+ENERGY_PERSIST_INTERVAL = 60
+```
+
+**Discovery note:** hubs that find the device via mDNS (e.g. Balco) still need a
+`_shelly._tcp` mDNS announcement reachable on the network — AstraMeter does not
+publish one itself yet (tracked separately). Until then, announce it externally, e.g.
+via `avahi-publish-service <name> _shelly._tcp 80 gen=2 app=Pro3EM ver=1.4.0` on the
+host running AstraMeter.
