@@ -207,7 +207,36 @@ def _patch_modbus_server_wiring(monkeypatch) -> list[dict]:
             pass
 
     monkeypatch.setattr(main_module, "ModbusOutputServer", _FakeModbusOutputServer)
+    # Whenever the (faked) Modbus server starts, async_main() also
+    # constructs a real MdnsAnnouncer, which would otherwise try actual
+    # multicast networking during these tests. Default it to a safe no-op
+    # here; tests that care about mDNS specifically call
+    # _patch_mdns_wiring() afterward to override this with an inspectable
+    # fake (monkeypatch.setattr application order means the later call wins).
+    _patch_mdns_wiring(monkeypatch)
     return constructions
+
+
+def _patch_mdns_wiring(monkeypatch, start_result: bool = True) -> list[dict]:
+    """Stub out MdnsAnnouncer, returning the list of kwargs each fake
+    construction was called with, plus recording start()/stop() calls on
+    each instance via the returned dicts' "calls" key."""
+    calls: list[dict] = []
+
+    class _FakeMdnsAnnouncer:
+        def __init__(self, **kwargs):
+            self._calls = {"started": False, "stopped": False, **kwargs}
+            calls.append(self._calls)
+
+        async def start(self):
+            self._calls["started"] = True
+            return start_result
+
+        async def stop(self):
+            self._calls["stopped"] = True
+
+    monkeypatch.setattr(main_module, "MdnsAnnouncer", _FakeMdnsAnnouncer)
+    return calls
 
 
 async def _run_async_main_with_modbus_section(
@@ -303,3 +332,63 @@ async def test_async_main_passes_configured_bind_host_through_unchanged(monkeypa
 
     assert len(constructions) == 1
     assert constructions[0]["bind_host"] == "192.168.1.50"
+
+
+async def test_async_main_announces_mdns_when_modbus_server_starts(monkeypatch):
+    _patch_modbus_server_wiring(monkeypatch)
+    mdns_calls = _patch_mdns_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": "192.168.1.50"},
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert len(mdns_calls) == 1
+    assert mdns_calls[0]["bind_host"] == "192.168.1.50"
+    assert mdns_calls[0]["started"] is True
+    assert mdns_calls[0]["stopped"] is True  # async_main() shut down cleanly
+
+
+async def test_async_main_skips_mdns_when_modbus_server_fails_to_start(monkeypatch):
+    """Advertising a device with nothing listening behind it would just be
+    misleading -- mDNS is gated on the Modbus server actually coming up."""
+
+    class _FailingModbusOutputServer:
+        def __init__(self, **kwargs):
+            pass
+
+        async def start(self):
+            return False
+
+        async def stop(self):
+            pass
+
+    monkeypatch.setattr(main_module, "ModbusOutputServer", _FailingModbusOutputServer)
+    mdns_calls = _patch_mdns_wiring(monkeypatch)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": "192.168.1.50"},
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert mdns_calls == []
+
+
+async def test_async_main_keeps_modbus_server_running_when_mdns_start_fails(
+    monkeypatch,
+):
+    """mDNS.start() returning False must not crash async_main() -- it just
+    means the device isn't discoverable; the Modbus server itself, already
+    listening, is left running."""
+    constructions = _patch_modbus_server_wiring(monkeypatch)
+    _patch_mdns_wiring(monkeypatch, start_result=False)
+
+    await _run_async_main_with_modbus_section(
+        {"ENABLED": "true", "BIND_HOST": "192.168.1.50"},
+        device_types=["shellypro3em_old", "shellypro3em_new"],
+        device_ids=["shellypro3em-x", "shellypro3em-x"],
+    )
+
+    assert len(constructions) == 1  # Modbus server was still constructed and started

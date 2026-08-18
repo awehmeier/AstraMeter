@@ -19,6 +19,7 @@ dependencies = [
     "smllib",
     "pyserial-asyncio-fast",
     "configupdater>=3.2",
+    "zeroconf>=0.130.0",
 ]
 
 [project.optional-dependencies]

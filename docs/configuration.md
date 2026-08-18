@@ -253,8 +253,7 @@ ENERGY_STATE_FILE = modbus_energy_state.json
 ENERGY_PERSIST_INTERVAL = 60
 ```
 
-**Discovery note:** hubs that find the device via mDNS (e.g. Balco) still need a
-`_shelly._tcp` mDNS announcement reachable on the network — AstraMeter does not
-publish one itself yet (tracked separately). Until then, announce it externally, e.g.
-via `avahi-publish-service <name> _shelly._tcp 80 gen=2 app=Pro3EM ver=1.4.0` on the
-host running AstraMeter.
+**Discovery note:** hubs that find the device via mDNS (e.g. Balco) need a
+`_shelly._tcp` announcement reachable on the network. When the Modbus TCP server
+above starts successfully, AstraMeter announces it itself (`_shelly._tcp`, port 80,
+`gen=2 app=Pro3EM ver=1.4.0`) — no separate `avahi-publish-service` setup needed.

@@ -25,6 +25,7 @@ from astrameter.marstek_api import (
     MarstekConfig,
     ensure_managed_fake_device,
 )
+from astrameter.mdns import MdnsAnnouncer
 from astrameter.modbus_server import ModbusOutputServer
 from astrameter.mqtt_insights import (
     MarstekMqttBinding,
@@ -647,6 +648,7 @@ async def async_main(
     powermeters: list[tuple[Powermeter, ClientFilter, bool]] = []
     insights: MqttInsightsService | None = None
     modbus_server: ModbusOutputServer | None = None
+    mdns_announcer: MdnsAnnouncer | None = None
 
     try:
         # Create powermeters
@@ -715,6 +717,17 @@ async def async_main(
                     )
                     if not await modbus_server.start():
                         modbus_server = None
+                    else:
+                        # mDNS announcement so hubs that discover devices
+                        # before connecting (e.g. Balco) can find it --
+                        # replaces the external avahi-publish-service unit
+                        # (astrameter-modbus-project docs/decisions/0003).
+                        # Only announced if the Modbus server itself came
+                        # up; advertising a device with nothing listening
+                        # would just be misleading.
+                        mdns_announcer = MdnsAnnouncer(bind_host=modbus_cfg.bind_host)
+                        if not await mdns_announcer.start():
+                            mdns_announcer = None
         elif modbus_cfg:
             logger.warning(
                 "MODBUS_SERVER.ENABLED is true, but no shellypro3em device "
@@ -744,6 +757,11 @@ async def async_main(
     finally:
         # Best-effort shutdown: each resource gets a stop attempt even if
         # an earlier one fails.
+        if mdns_announcer:
+            try:
+                await mdns_announcer.stop()
+            except Exception:
+                logger.exception("Error stopping mDNS announcement")
         if modbus_server:
             try:
                 await modbus_server.stop()

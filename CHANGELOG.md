@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** an optional Modbus TCP output server for the Shelly Pro 3EM emulator (`[MODBUS_SERVER]`, disabled by default), so third-party hubs that expect a real Shelly Pro 3EM over Modbus TCP — such as the BLUETTI Balco Transfer Hub — can read live meter data alongside the existing UDP emulation.
+- **Added** an optional Modbus TCP output server for the Shelly Pro 3EM emulator (`[MODBUS_SERVER]`, disabled by default), so third-party hubs that expect a real Shelly Pro 3EM over Modbus TCP — such as the BLUETTI Balco Transfer Hub — can read live meter data alongside the existing UDP emulation. AstraMeter now also announces itself over mDNS on startup, so hubs that discover devices before connecting no longer need a separate manual setup step to find it.
 
 ## 2.2.4
 
